@@ -6,6 +6,8 @@ const categoryInput = document.querySelector('#category');
 const settings = document.querySelector('#settings');
 const searchOptions = ['safesearch', 'per_page', 'region', 'mode', 'match'].map(name => document.querySelector(`[name="${name}"][form="search"]`));
 let pending = null;
+let fillPending = null;
+let sequence = 0;
 let wikiPending = null;
 let lastOverview = null;
 let currentQuery = queryInput.value;
@@ -23,6 +25,7 @@ function resetMedia() {
   mediaController.abort(); mediaController = new AbortController();
   if (previewController) previewController.abort();
   if (imageObserver) imageObserver.disconnect();
+  imageObserver = null;
   if (iconObserver) iconObserver.disconnect();
   iconObserver = null;
   imageJobs.length = 0;
@@ -80,10 +83,10 @@ function pumpImages() {
     }).finally(() => { imageActive--; pumpImages(); });
   }
 }
-function attachImages() {
+function attachImages(root = output) {
   const signal = mediaController.signal;
   const enqueue = img => { imageJobs.push({img, signal}); pumpImages(); };
-  if ('IntersectionObserver' in window) {
+  if ('IntersectionObserver' in window && !imageObserver) {
     // Observe the visible tile, since hidden images have no intersection box.
     imageObserver = new IntersectionObserver(entries => entries.forEach(entry => {
       if (entry.isIntersecting) {
@@ -92,8 +95,11 @@ function attachImages() {
         if (img) enqueue(img);
       }
     }), {rootMargin: '300px'});
-    output.querySelectorAll('img[data-src]').forEach(img => imageObserver.observe(img.parentElement));
-  } else output.querySelectorAll('img[data-src]').forEach(enqueue);
+  }
+  root.querySelectorAll('img[data-src]:not([data-queued])').forEach(img => {
+    img.dataset.queued = 'true';
+    if (imageObserver) imageObserver.observe(img.parentElement); else enqueue(img);
+  });
 }
 function pumpIcons() {
   while (iconActive < 2 && iconJobs.length) {
@@ -202,14 +208,82 @@ function selectCategory(category) {
   });
 }
 selectCategory(categoryInput.value);
+function parseMarkup(markup) {
+  const parsed = document.createElement('template');
+  parsed.innerHTML = markup;
+  return parsed;
+}
+function rememberPage(key, markup, fragment, page) {
+  if (!fragment || fragment.dataset.limited === '1' || fragment.dataset.page !== page) return;
+  const assetCount = new Set([...markup.matchAll(/\/(?:media|icon)\/[A-Za-z0-9_-]{32}/g)].map(match => match[0])).size;
+  pageCache.delete(key);
+  while (pageCache.size && (pageCache.size >= 12 || [...pageCache.values()].reduce((sum, entry) => sum + entry.assetCount, 0) + assetCount > 400)) {
+    pageCache.delete(pageCache.keys().next().value);
+  }
+  if (assetCount <= 400) pageCache.set(key, {markup, assetCount, expires: Date.now() + 45000});
+}
+async function fillResults(data, key, id) {
+  const controller = new AbortController();
+  fillPending = controller;
+  data.set('progressive', 'fill');
+  try {
+    const response = await fetch('/', {method: 'POST', body: data,
+      headers: {'X-Portal-Request': '1'}, cache: 'no-store', credentials: 'omit',
+      referrerPolicy: 'no-referrer', signal: controller.signal});
+    const markup = await response.text();
+    if (sequence !== id || fillPending !== controller) return;
+    const parsed = parseMarkup(markup);
+    const fragment = parsed.content.querySelector('.search-state');
+    const current = output.querySelector('.search-state');
+    if (!response.ok || !fragment || !current) throw new Error('Additional results unavailable');
+    const oldContent = current.querySelector('.results-content');
+    const newContent = fragment.querySelector('.results-content');
+    const focused = document.activeElement;
+    const oldList = oldContent.querySelector('.web-list, .image-grid, .video-list');
+    const newList = newContent.querySelector('.web-list, .image-grid, .video-list');
+    const identity = card => JSON.stringify([
+      card.querySelector('h2 a')?.getAttribute('href'), card.querySelector('h2')?.textContent,
+      card.querySelector('img[data-src]')?.dataset.src,
+      card.querySelector('.image-open')?.dataset.preview,
+      card.querySelector('img[data-icon]')?.dataset.icon,
+    ]);
+    if (oldList && newList) {
+      const oldCards = [...oldList.children], newCards = [...newList.children];
+      oldCards.forEach((card, index) => {
+        if (newCards[index] && identity(card) === identity(newCards[index])) newCards[index].replaceWith(card);
+      });
+    }
+    oldContent.querySelectorAll('img[data-src]').forEach(img => { if (imageObserver) imageObserver.unobserve(img.parentElement); });
+    oldContent.querySelectorAll('img[data-icon]').forEach(img => { if (iconObserver) iconObserver.unobserve(img.parentElement); });
+    oldContent.replaceWith(newContent);
+    if (focused && newContent.contains(focused)) focused.focus({preventScroll: true});
+    Object.assign(current.dataset, fragment.dataset);
+    // Keep the encyclopedia panel and already downloaded image blobs. Only
+    // the result list changes; no second Wikipedia request or image reset.
+    rememberPage(key, markup, fragment, String(data.get('page') || '0'));
+    attachImages(newContent);
+    attachIcons(newContent);
+  } catch (error) {
+    if (error.name !== 'AbortError' && sequence === id) {
+      const status = output.querySelector('.fill-status');
+      if (status) status.textContent = '追加の結果を取得できませんでした。表示済みの結果はそのまま利用できます。';
+    }
+  } finally {
+    if (fillPending === controller) fillPending = null;
+  }
+}
 async function submit(form) {
+  const id = ++sequence;
   if (pending) pending.abort();
+  if (fillPending) fillPending.abort();
+  fillPending = null;
   if (wikiPending) wikiPending.abort();
   wikiPending = null;
   const controller = new AbortController();
   pending = controller;
   const data = new FormData(form);
   if (form === search) data.set('category', categoryInput.value);
+  data.set('progressive', 'initial');
   const query = String(data.get('q') || '').trim();
   if (!query) { pending = null; queryInput.focus(); return; }
   resetMedia();
@@ -225,35 +299,28 @@ async function submit(form) {
   try {
     const cacheKey = JSON.stringify([data.get('category'), ...searchOptions.map(input => data.get(input.name)), data.get('page') || '0']);
     const cached = pageCache.get(cacheKey);
-    let markup;
+    let markup, ok = true;
     if (cached && cached.expires > Date.now()) markup = cached.markup;
     else {
       const response = await fetch('/', {method: 'POST', body: data,
         headers: {'X-Portal-Request': '1'}, cache: 'no-store', credentials: 'omit',
         referrerPolicy: 'no-referrer', signal: controller.signal});
       markup = await response.text();
-      const parsed = document.createElement('template');
-      parsed.innerHTML = markup;
-      const fragment = parsed.content.querySelector('.search-state');
-      if (pending === controller && response.ok && fragment && fragment.dataset.limited !== '1' && fragment.dataset.page === String(data.get('page') || '0')) {
-        const assetCount = new Set([...markup.matchAll(/\/(?:media|icon)\/[A-Za-z0-9_-]{32}/g)].map(match => match[0])).size;
-        pageCache.delete(cacheKey);
-        // A 100-image page has many opaque IDs. Keep fewer large pages so a
-        // cached fragment does not point at IDs evicted from the server map.
-        while (pageCache.size && (pageCache.size >= 12 || [...pageCache.values()].reduce((sum, entry) => sum + entry.assetCount, 0) + assetCount > 400)) {
-          pageCache.delete(pageCache.keys().next().value);
-        }
-        if (assetCount <= 400) pageCache.set(cacheKey, {markup, assetCount, expires: Date.now() + 45000});
-      }
+      ok = response.ok;
     }
     if (pending !== controller) return;
-    // All text/attributes are escaped server-side. Only this site's fragments.
-    output.innerHTML = markup;
+    // Parse once into an inert template, then move its nodes to the page.
+    const parsed = parseMarkup(markup);
+    const fragment = parsed.content.querySelector('.search-state');
+    if (ok) rememberPage(cacheKey, markup, fragment, String(data.get('page') || '0'));
+    const completing = fragment && fragment.dataset.completing === '1';
+    output.replaceChildren(parsed.content);
     loadOverview(query);
     queryInput.blur();
     attachImages();
     attachIcons();
     window.scrollTo({top: 0, behavior: 'instant'});
+    if (ok && completing) fillResults(data, cacheKey, id);
   } catch (error) {
     if (error.name !== 'AbortError' && pending === controller) output.textContent = '接続に失敗しました。もう一度お試しください。';
   } finally {
@@ -282,6 +349,9 @@ document.querySelector('#theme').addEventListener('change', event => {
 });
 document.querySelector('#input-clear').addEventListener('click', () => { queryInput.value = ''; queryInput.focus(); });
 function clearScreen() {
+  sequence++;
+  if (fillPending) fillPending.abort();
+  fillPending = null;
   resetMedia();
   if (pending) pending.abort();
   if (wikiPending) wikiPending.abort();

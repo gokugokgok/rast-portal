@@ -98,7 +98,7 @@ def fetch_page(query, category, safe, region, mode, match, number, budget):
     return {'results': results, 'failed': bool(raw.get('unresponsive_engines'))}
 
 
-def search_results(query, category, safe, region, mode, match, page, count, budget):
+def search_results(query, category, safe, region, mode, match, page, count, budget, max_fetch=6):
     key = (query, category, safe, region, mode, match)
     lock = _locks[int.from_bytes(search_cache.key(*key)[:2], 'big') % len(_locks)]
     if not lock.acquire(timeout=1):
@@ -112,11 +112,11 @@ def search_results(query, category, safe, region, mode, match, page, count, budg
         # Default searches normally need one source page. Large result sizes
         # can request up to three source pages together, six in one HTTP POST.
         # This cap also bounds deliberately forged far-away page requests.
-        while len(pool['results']) < target and not pool['exhausted'] and fetched < 6:
+        while len(pool['results']) < target and not pool['exhausted'] and fetched < max_fetch:
             # Learn the actual page size first; image providers sometimes
             # return 100 items at once, so speculative extra pages waste time.
             estimate = max(10, pool['yield'])
-            batch = min(3, 6 - fetched, max(1, math.ceil((target - len(pool['results'])) / estimate)))
+            batch = min(3, max_fetch - fetched, max(1, math.ceil((target - len(pool['results'])) / estimate)))
             if pool['next'] == 1:
                 batch = 1
             batch = min(batch, 51 - pool['next'])

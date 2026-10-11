@@ -1,0 +1,5 @@
+<div class="quick-controls" aria-label="検索する前の設定">
+  <label for="safesearch"><span>セーフサーチ</span><select id="safesearch" name="safesearch" form="search"><option value="0"{% if safesearch == '0' %} selected{% endif %}>オフ</option><option value="1"{% if safesearch == '1' %} selected{% endif %}>標準</option><option value="2"{% if safesearch == '2' %} selected{% endif %}>厳格</option></select></label>
+  <label for="region" class="region-control"><span>地域・言語</span><select id="region" name="region" form="search" title="対応する検索元の地域・言語を指定します。国の厳密な限定やIPの変更ではありません。">{% for code, label in regions.items() %}<option value="{{ code }}"{% if region == code %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <label for="per-page" class="count-control"><span>表示件数</span><select id="per-page" name="per_page" form="search" title="取得できる範囲での表示上限です。多いほど追加取得が必要になる場合があります。">{% for count in counts %}<option value="{{ count }}"{% if per_page == count %} selected{% endif %}>{{ count }}件</option>{% endfor %}</select></label>
+</div>

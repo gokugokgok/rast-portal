@@ -1,4 +1,5 @@
 import html
+import gzip
 import json
 from pathlib import Path
 import os
@@ -90,6 +91,25 @@ def privacy_headers(response):
         'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
         'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     })
+    code_asset = request.endpoint == 'static' and request.path in ('/static/app.js', '/static/style.css')
+    if code_asset and response.status_code in (200, 304):
+        # Only non-personal code files may be retained and revalidated.
+        response.headers['Cache-Control'] = 'private, max-age=0, must-revalidate'
+        response.headers.pop('Pragma', None)
+        etag, _ = response.get_etag()
+        if etag:
+            response.set_etag(etag, weak=True)
+    compressible = response.mimetype in ('text/html', 'text/css', 'text/javascript', 'application/javascript')
+    if response.status_code == 200 and compressible:
+        response.vary.add('Accept-Encoding')
+        if request.accept_encodings['gzip'] > 0 and not response.headers.get('Content-Encoding'):
+            response.direct_passthrough = False
+            data = response.get_data()
+            if len(data) >= 1024:
+                compressed = gzip.compress(data, compresslevel=3, mtime=0)
+                if len(compressed) < len(data):
+                    response.set_data(compressed)
+                    response.headers['Content-Encoding'] = 'gzip'
     return response
 
 
@@ -130,8 +150,14 @@ def index():
     if (category not in CATEGORIES or safesearch not in ('0', '1', '2') or per_page not in COUNTS
             or region not in REGIONS or mode not in MODES or match not in ('normal', 'phrase')):
         return show('検索設定が無効です。', 400)
+    progressive = request.form.get('progressive', '')
+    if progressive not in ('', 'initial', 'fill'):
+        return show('検索設定が無効です。', 400)
+    completing = False
     try:
-        payload = search_results(query, category, safesearch, region, mode, match, page, per_page, budget_available)
+        max_fetch = 1 if progressive == 'initial' and page == 0 else 5 if progressive == 'fill' and page == 0 else 6
+        payload = search_results(query, category, safesearch, region, mode, match, page, per_page, budget_available, max_fetch=max_fetch)
+        completing = progressive == 'initial' and page == 0 and payload['limited'] and bool(payload['results'])
         page = payload['page']
         results = []
         for item in payload.get('results', []):
@@ -159,14 +185,14 @@ def index():
         if failed:
             warnings.append('一部の検索元が応答していません。取得できた結果を表示しています。' if results else
                             '検索元が応答しませんでした。少し待って再試行してください。')
-        if payload['limited']:
+        if payload['limited'] and not completing:
             warnings.append('今回取得できた分を表示しています。件数を増やすには検索し直すか「広く検索」を試してください。')
         if payload['recovered']:
             warnings.append('指定ページの取得範囲に届かなかったため、取得済みのページを表示しています。')
         return show(results=results, searched=True, q=query, page=page, more=payload['more'],
                     warning=' '.join(warnings) or None, category=category, safesearch=safesearch,
                     page_numbers=payload['page_numbers'], per_page=per_page, region=region, mode=mode,
-                    match=match, limited=payload['limited'])
+                    match=match, limited=payload['limited'], completing=completing)
     except SearchError as error:
         messages = {429: 'アクセスが集中しています。1分ほど待って再試行してください。',
                     503: '検索処理が混雑しています。少し待って再試行してください。'}

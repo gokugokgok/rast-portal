@@ -2,15 +2,16 @@
 {% macro options() %}<input type="hidden" name="safesearch" value="{{ safesearch }}"><input type="hidden" name="per_page" value="{{ per_page }}"><input type="hidden" name="region" value="{{ region }}"><input type="hidden" name="mode" value="{{ mode }}"><input type="hidden" name="match" value="{{ match }}">{% endmacro %}
 {% if error %}<div class="message error" role="alert">{{ error }}</div>{% endif %}
 {% if searched %}
-<section class="search-state" data-category="{{ category }}" data-safe="{{ safesearch }}" data-count="{{ per_page }}" data-region="{{ region }}" data-mode="{{ mode }}" data-match="{{ match }}" data-page="{{ page }}" data-limited="{{ 1 if limited else 0 }}">
+<section class="search-state" data-category="{{ category }}" data-safe="{{ safesearch }}" data-count="{{ per_page }}" data-region="{{ region }}" data-mode="{{ mode }}" data-match="{{ match }}" data-page="{{ page }}" data-limited="{{ 1 if limited else 0 }}" data-completing="{{ 1 if completing else 0 }}">
   <nav class="category-tabs" aria-label="検索の種類">
     {% for key, label in tabs %}<form method="post" action="/" class="tab-form"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="category" value="{{ key }}">{{ options() }}<button{% if category == key %} class="active" aria-current="page"{% endif %}>{{ label }}</button></form>{% endfor %}
-    <span class="safe-label">セーフサーチ：{{ {'0': 'オフ', '1': '標準', '2': '厳格'}[safesearch] }}</span>
+
   </nav>
   {% if category == 'all' %}<div class="results-layout">{% endif %}
   <div class="results-content{% if category == 'images' %} wide{% endif %}">
     <div class="results-meta"><span>{{ {'all': 'ウェブ', 'images': '画像', 'videos': '動画', 'news': 'ニュース'}[category] }}の検索結果</span><span>{{ page + 1 }}ページ目</span></div>
     <p class="search-summary">{{ results|length }}件表示 / 最大{{ per_page }}件 · {{ regions[region] }} · {{ modes[mode] }}{% if match == 'phrase' %} · 完全一致{% endif %}</p>
+    {% if completing %}<p class="fill-status" role="status">取得できた結果を表示しています。残りを読み込み中…</p>{% endif %}
     {% if warning %}<p class="message warning" role="status">{{ warning }}</p>{% endif %}
     <div class="{% if category == 'images' %}image-grid{% elif category == 'videos' %}video-list{% else %}web-list{% endif %}">
       {% for result in results %}
@@ -27,11 +28,11 @@
       {% endif %}
       {% else %}<div class="empty-state"><span class="empty-icon">⌕</span><h2>結果が見つかりませんでした</h2><p>別の言葉や検索の種類で試してください。</p></div>{% endfor %}
     </div>
-    <nav class="pagination" aria-label="ページ切り替え">
+    {% if not completing %}<nav class="pagination" aria-label="ページ切り替え">
       {% if page > 0 %}<form method="post" action="/" class="page-form"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="category" value="{{ category }}">{{ options() }}<input type="hidden" name="page" value="{{ page - 1 }}"><button>← 前へ</button></form>{% endif %}
       {% for number in page_numbers %}<form method="post" action="/" class="page-form page-number"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="category" value="{{ category }}">{{ options() }}<input type="hidden" name="page" value="{{ number }}"><button aria-label="{{ number + 1 }}ページ目"{% if number == page %} class="current" aria-current="page" disabled{% endif %}>{{ number + 1 }}</button></form>{% endfor %}
       {% if more %}<form method="post" action="/" class="page-form"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="category" value="{{ category }}">{{ options() }}<input type="hidden" name="page" value="{{ page + 1 }}"><button>次へ →</button></form>{% endif %}
-    </nav>
+    </nav>{% endif %}
   </div>
   {% if category == 'all' %}<aside class="wiki-panel" aria-label="Wikipediaの概要" aria-live="polite"><div id="wiki-content"><div class="wiki-heading"><span class="wiki-mark">{{ favicon(site_icon("https://ja.wikipedia.org/")) }}</span><span>Wikipedia<span class="wiki-subtitle">関連する記事の概要</span></span></div><p class="wiki-loading" role="status">概要を読み込み中…</p><noscript><p class="wiki-empty">概要の表示にはJavaScriptを有効にしてください。</p></noscript></div></aside></div>{% endif %}
 </section>
