@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, quote
 
 import requests
 from flask import Flask, Response, redirect, render_template, request
-from media import register_image, load_image
+from media import register_image, load_image, ImageBusy
 from cache import MemoryCache
 
 app = Flask(__name__)
@@ -84,7 +84,7 @@ def privacy_headers(response):
         'X-Frame-Options': 'DENY',
         'X-Robots-Tag': 'noindex, nofollow, noarchive',
         'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-        'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     })
     return response
 
@@ -148,12 +148,12 @@ def index():
             if parsed is None:
                 continue
             kind = 'image' if item.get('template') == 'images.html' or category == 'images' else 'video' if item.get('template') == 'videos.html' or category == 'videos' else 'web'
-            thumbnail = item.get('thumbnail_src') or item.get('thumbnail') or item.get('img_src')
+            thumbnail = register_image(item.get('thumbnail_src'), item.get('thumbnail'), item.get('img_src'))
             results.append({'url': url, 'host': parsed.hostname,
                             'title': plain_text(item.get('title') or url),
                             'description': plain_text(item.get('content')),
-                            'kind': kind, 'thumbnail': register_image(thumbnail),
-                            'preview': register_image(item.get('img_src') or thumbnail) if kind == 'image' else '',
+                            'kind': kind, 'thumbnail': thumbnail,
+                            'preview': register_image(item.get('img_src'), item.get('thumbnail_src'), item.get('thumbnail')) if kind == 'image' else '',
                             'resolution': plain_text(item.get('resolution')),
                             'duration': plain_text(item.get('length') or item.get('duration')),
                             'date': plain_text(item.get('publishedDate') or item.get('pubdate'))[:10],
@@ -223,7 +223,10 @@ def overview():
 def media(token):
     if not re.fullmatch(r'[A-Za-z0-9_-]{32}', token):
         return '', 404
-    image = load_image(token)
+    try:
+        image = load_image(token)
+    except ImageBusy:
+        return Response('', status=503, headers={'Retry-After': '1'})
     if image is None:
         return '', 404
     data, mime = image

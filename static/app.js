@@ -9,6 +9,124 @@ let pending = null;
 let wikiPending = null;
 let lastOverview = null;
 let currentQuery = queryInput.value;
+let mediaController = new AbortController();
+let previewController = null;
+let imageObserver = null;
+const assets = new Map();
+const imageJobs = [];
+let imageActive = 0;
+function resetMedia() {
+  mediaController.abort(); mediaController = new AbortController();
+  if (previewController) previewController.abort();
+  if (imageObserver) imageObserver.disconnect();
+  imageJobs.length = 0;
+  assets.forEach(entry => { if (entry.url) URL.revokeObjectURL(entry.url); });
+  assets.clear();
+  const dialog = document.querySelector('#image-dialog');
+  if (dialog.open) dialog.close();
+  document.querySelector('#preview-image').removeAttribute('src');
+  document.querySelector('#preview-status').textContent = '';
+}
+function imageAsset(src, signal) {
+  const existing = assets.get(src);
+  if (existing && (existing.url || !existing.signal.aborted)) return existing.promise;
+  const entry = {url: null, signal};
+  entry.promise = (async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await fetch(src, {cache: 'no-store', credentials: 'omit',
+        referrerPolicy: 'no-referrer', signal});
+      if ((response.status === 503 || response.status === 429) && attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        continue;
+      }
+      if (!response.ok) throw new Error('Image unavailable');
+      const blob = await response.blob();
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (!/^image\/(png|jpeg|gif|webp|avif)$/.test(blob.type)) throw new Error('Unsupported image');
+      entry.url = URL.createObjectURL(blob);
+      return entry.url;
+    }
+  })().catch(error => {
+    if (assets.get(src) === entry) assets.delete(src);
+    throw error;
+  });
+  assets.set(src, entry);
+  return entry.promise;
+}
+function pumpImages() {
+  while (imageActive < 3 && imageJobs.length) {
+    const {img, signal} = imageJobs.shift();
+    if (signal.aborted || !img.isConnected) continue;
+    imageActive++;
+    imageAsset(img.dataset.src, signal).then(async src => {
+      if (signal.aborted || !img.isConnected) return;
+      img.src = src;
+      await img.decode();
+      if (signal.aborted || !img.isConnected) return;
+      img.hidden = false;
+      img.parentElement.classList.remove('image-unavailable');
+    }).catch(error => {
+      if (error.name !== 'AbortError' && !signal.aborted && img.isConnected) {
+        img.hidden = true; img.parentElement.classList.add('image-unavailable');
+      }
+    }).finally(() => { imageActive--; pumpImages(); });
+  }
+}
+function attachImages() {
+  const signal = mediaController.signal;
+  const enqueue = img => { imageJobs.push({img, signal}); pumpImages(); };
+  if ('IntersectionObserver' in window) {
+    // Observe the visible tile, since hidden images have no intersection box.
+    imageObserver = new IntersectionObserver(entries => entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        imageObserver.unobserve(entry.target);
+        const img = entry.target.querySelector('img[data-src]');
+        if (img) enqueue(img);
+      }
+    }), {rootMargin: '300px'});
+    output.querySelectorAll('img[data-src]').forEach(img => imageObserver.observe(img.parentElement));
+  } else output.querySelectorAll('img[data-src]').forEach(enqueue);
+}
+async function openPreview(button) {
+  if (previewController) previewController.abort();
+  const controller = previewController = new AbortController();
+  const dialog = document.querySelector('#image-dialog');
+  const img = document.querySelector('#preview-image');
+  const status = document.querySelector('#preview-status');
+  const tile = button.querySelector('img[data-src]');
+  const thumbnail = tile && tile.naturalWidth > 0 ? tile.src : null;
+  let displayed = Boolean(thumbnail);
+  img.hidden = !displayed;
+  img.parentElement.classList.remove('image-unavailable');
+  if (thumbnail) img.src = thumbnail; else img.removeAttribute('src');
+  img.alt = button.dataset.title;
+  document.querySelector('#preview-title').textContent = button.dataset.title;
+  document.querySelector('#preview-host').textContent = button.dataset.host;
+  document.querySelector('#preview-link').href = button.dataset.url;
+  status.textContent = displayed ? '大きい画像を読み込み中…' : '画像を読み込み中…';
+  if (!dialog.open) dialog.showModal();
+  const apply = async src => {
+    const probe = new Image(); probe.src = src; await probe.decode();
+    if (controller.signal.aborted || !dialog.open) return false;
+    img.src = src; img.hidden = false; displayed = true; return true;
+  };
+  try {
+    const src = await imageAsset(button.dataset.preview, controller.signal);
+    if (await apply(src)) status.textContent = '';
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    if (!displayed && button.dataset.fallback) {
+      try {
+        const src = await imageAsset(button.dataset.fallback, mediaController.signal);
+        await apply(src);
+      } catch (_) {}
+    }
+    if (controller.signal.aborted || !dialog.open) return;
+    status.textContent = displayed ? 'サムネイルで表示しています。' : '画像元から取得できませんでした。掲載サイトで確認できます。';
+    if (!displayed) img.parentElement.classList.add('image-unavailable');
+  }
+}
 document.documentElement.classList.add('js-enabled');
 async function loadOverview(query) {
   const panel = output.querySelector('#wiki-content');
@@ -54,6 +172,7 @@ async function submit(form) {
   if (form === search) data.set('category', categoryInput.value);
   const query = String(data.get('q') || '').trim();
   if (!query) { pending = null; queryInput.focus(); return; }
+  resetMedia();
   if (lastOverview && lastOverview.query !== query) lastOverview = null;
   currentQuery = query;
   queryInput.value = query;
@@ -73,9 +192,7 @@ async function submit(form) {
     output.innerHTML = markup;
     loadOverview(query);
     queryInput.blur();
-    output.querySelectorAll('img').forEach(img => {
-      img.addEventListener('error', () => { img.hidden = true; img.parentElement.classList.add('image-unavailable'); });
-    });
+    attachImages();
     window.scrollTo({top: 0, behavior: 'instant'});
   } catch (error) {
     if (error.name !== 'AbortError' && pending === controller) output.textContent = '接続に失敗しました。もう一度お試しください。';
@@ -105,6 +222,7 @@ document.querySelector('#theme').addEventListener('change', event => {
 });
 document.querySelector('#input-clear').addEventListener('click', () => { queryInput.value = ''; queryInput.focus(); });
 function clearScreen() {
+  resetMedia();
   if (pending) pending.abort();
   if (wikiPending) wikiPending.abort();
   wikiPending = null;
@@ -132,29 +250,19 @@ document.querySelectorAll('.close-dialog').forEach(button => button.addEventList
 document.addEventListener('click', event => {
   const button = event.target.closest('.image-open');
   if (button) {
-    const dialog = document.querySelector('#image-dialog');
-    const img = document.querySelector('#preview-image');
-    img.hidden = false;
-    img.parentElement.classList.remove('image-unavailable');
-    img.dataset.fallback = button.dataset.fallback;
-    img.src = button.dataset.preview; img.alt = button.dataset.title;
-    document.querySelector('#preview-title').textContent = button.dataset.title;
-    document.querySelector('#preview-host').textContent = button.dataset.host;
-    document.querySelector('#preview-link').href = button.dataset.url;
-    dialog.showModal();
+    openPreview(button);
   }
   if (!settings.contains(event.target)) settings.open = false;
 });
-document.querySelector('#preview-image').addEventListener('error', event => {
-  const img = event.target;
-  const fallback = img.dataset.fallback;
-  if (fallback && new URL(fallback, location.href).href !== img.src) {
-    img.dataset.fallback = '';
-    img.src = fallback;
-  } else {
-    img.hidden = true;
-    img.parentElement.classList.add('image-unavailable');
-  }
+document.querySelector('#image-dialog').addEventListener('close', () => {
+  if (previewController) previewController.abort();
+  const img = document.querySelector('#preview-image');
+  const src = img.src;
+  const usedByTile = [...output.querySelectorAll('img[data-src]')].some(tile => tile.src === src);
+  if (!usedByTile) assets.forEach((entry, key) => {
+    if (entry.url === src) { URL.revokeObjectURL(entry.url); assets.delete(key); }
+  });
+  img.removeAttribute('src');
 });
 document.querySelectorAll('dialog').forEach(dialog => {
   dialog.addEventListener('click', event => { if (event.target === dialog) {
@@ -170,3 +278,4 @@ document.addEventListener('keydown', event => {
 window.addEventListener('pagehide', clearScreen);
 window.addEventListener('pageshow', event => { if (event.persisted) clearScreen(); });
 if (currentQuery) loadOverview(currentQuery);
+attachImages();

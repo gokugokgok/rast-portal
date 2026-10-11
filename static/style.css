@@ -31,3 +31,5 @@
 @media(max-width:1150px){.results-layout{grid-template-columns:minmax(0,1fr) 280px;gap:26px}.wiki-panel{padding:20px}.wiki-panel h2{font-size:23px}}
 @media(max-width:900px){.results-layout{display:flex;flex-direction:column;margin-left:134px;padding-right:22px;gap:28px}.results-layout>.results-content{width:100%;order:2}.wiki-panel{width:100%;margin-top:0;order:1}.wiki-panel h2{margin:15px 0 12px}.wiki-extract{display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}.wiki-attribution{margin-top:12px}}
 @media(max-width:600px){.results-layout{margin:0;padding:18px 20px 28px;gap:24px}.wiki-panel{padding:18px;border-radius:14px}.wiki-panel h2{font-size:22px}.wiki-extract{font-size:12px}.pagination{gap:2px}.pagination .page-number button{min-width:32px;padding:9px 5px}.pagination>form:not(.page-number) button{padding:9px 8px;font-size:11px}}
+
+.preview-status{font-size:12px;color:var(--muted);margin:12px 0 0;line-height:1.7}.preview-status:empty{display:none}.image-tile img[hidden],.video-thumb img[hidden],#preview-image[hidden]{display:none}.image-tile noscript{width:100%;height:100%}
