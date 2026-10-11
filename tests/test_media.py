@@ -25,6 +25,25 @@ class MediaTests(unittest.TestCase):
         for url in ['javascript:alert(1)', 'file:///etc/passwd', 'https://user:password@example.com/a', 'http://example.com:8888/a', '\nhttps://example.com/a']:
             self.assertEqual(media.register_image(url), '')
 
+    def test_repeated_registration_reuses_id_and_keeps_preview_deadline_separate(self):
+        url = 'https://example.com/one.png'
+        first = media.register_image(url, thumbnail=True)
+        for _ in range(100):
+            self.assertEqual(media.register_image(url, thumbnail=True), first)
+        self.assertNotEqual(media.register_image(url), first)
+        self.assertEqual(len(media._images), 2)
+        with patch('media.time.monotonic', return_value=time.monotonic() + media.TTL + 1):
+            self.assertNotEqual(media.register_image(url, thumbnail=True), first)
+
+    @patch('media.fetch_public_image', return_value=(b'\x89PNG\r\n\x1a\nfixture', 'image/png'))
+    def test_reused_image_id_survives_capacity_eviction(self, fetcher):
+        paths = [media.register_image(f'https://example.com/{i}.png') for i in range(media.MAX_IMAGES)]
+        self.assertEqual(media.register_image('https://example.com/0.png'), paths[0])
+        media.register_image('https://example.com/new.png')
+        self.assertIsNotNone(media.load_image(paths[0].split('/')[-1]))
+        self.assertIsNone(media.load_image(paths[1].split('/')[-1]))
+        self.assertEqual(len(media._images), media.MAX_IMAGES)
+
     @patch('media.fetch_public_image')
     def test_original_failure_falls_back_and_reuses_thumbnail(self, fetcher):
         png = (b'\x89PNG\r\n\x1a\nthumbnail', 'image/png')

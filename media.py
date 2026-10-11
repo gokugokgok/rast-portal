@@ -69,9 +69,16 @@ def register_image(*urls, thumbnail=False):
     token = secrets.token_urlsafe(24)
     now = time.monotonic()
     with _lock:
-        stale = [key for key, (_, expiry) in _images.items() if expiry <= now]
-        for key in stale:
-            _images.pop(key, None)
+        existing = None
+        for key, (saved, expiry) in list(_images.items()):
+            if expiry <= now:
+                _images.pop(key, None)
+            elif saved == (sources, thumbnail):
+                existing = key
+        if existing:
+            _images[existing] = ((sources, thumbnail), now + TTL)
+            _images.move_to_end(existing)
+            return '/media/' + existing
         while len(_images) >= MAX_IMAGES:
             _images.popitem(last=False)
         _images[token] = ((sources, thumbnail), now + TTL)

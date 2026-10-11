@@ -33,7 +33,7 @@ class PortalTests(unittest.TestCase):
         client.post.return_value.status_code = 200
         client.post.return_value.json.return_value = {
             'results': [
-                {'url': 'https://example.com/', 'title': '<script>alert(1)</script>', 'content': '<b>Text</b>'},
+                *({'url': f'https://example.com/{i}', 'title': '<script>alert(1)</script>', 'content': '<b>Text</b>'} for i in range(100)),
                 {'url': 'javascript:alert(1)', 'title': 'bad'},
             ]}
         response = self.client.post('/', data={'q': 'private-test', 'page': '1'})
@@ -48,7 +48,8 @@ class PortalTests(unittest.TestCase):
         self.assertNotIn('?', args[0])
         self.assertEqual(args[0], 'http://127.0.0.1:8888/search')
         self.assertEqual(kwargs['data']['q'], 'private-test')
-        self.assertEqual(kwargs['data']['pageno'], 2)
+        self.assertIn(kwargs['data']['pageno'], (1, 2))
+        self.assertNotIn('categories', kwargs['data'])
         self.assertEqual(kwargs['data']['format'], 'json')
         self.assertNotIn('params', kwargs)
         self.assertNotIn('X-Forwarded-For', kwargs['headers'])
@@ -89,13 +90,14 @@ class PortalTests(unittest.TestCase):
     def test_categories_safesearch_and_pagination(self, factory):
         session = factory.return_value.__enter__.return_value
         session.post.return_value.status_code = 200
-        session.post.return_value.json.return_value = {'results': [{'url': 'https://example.com/', 'title': 'Result', 'thumbnail_src': 'https://example.com/a.jpg', 'img_src': 'https://example.com/full.jpg', 'template': 'images.html'}]}
+        session.post.return_value.json.return_value = {'results': [{'url': f'https://example.com/{i}', 'title': 'Result', 'thumbnail_src': 'https://example.com/a.jpg', 'img_src': f'https://example.com/full/{i}.jpg', 'template': 'images.html'} for i in range(20)]}
         for category, upstream in [('all', 'general'), ('images', 'images'), ('videos', 'videos'), ('news', 'news')]:
             for safe in ('0', '1', '2'):
                 response = self.client.post('/', data={'q': 'sample', 'category': category, 'safesearch': safe})
                 self.assertEqual(response.status_code, 200)
                 sent = session.post.call_args.kwargs['data']
-                self.assertEqual(sent['categories'], upstream)
+                self.assertIn({'all': 'google', 'images': 'google images', 'videos': 'google videos', 'news': 'google news'}[category], sent['engines'].split(','))
+                self.assertNotIn('categories', sent)
                 self.assertEqual(sent['safesearch'], safe)
                 self.assertIn(('name="category" value="' + category + '"').encode(), response.data)
                 self.assertIn(('name="safesearch" value="' + safe + '"').encode(), response.data)
@@ -111,23 +113,23 @@ class PortalTests(unittest.TestCase):
     def test_cache_respects_page_category_safety_and_expiry(self, factory):
         session = factory.return_value.__enter__.return_value
         session.post.return_value.status_code = 200
-        session.post.return_value.json.return_value = {'results': [{'url': 'https://example.com', 'title': 'Result'}]}
+        session.post.return_value.json.return_value = {'results': [{'url': f'https://example.com/{i}', 'title': 'Result'} for i in range(100)]}
         data = {'q': 'sample', 'category': 'all', 'safesearch': '1', 'page': '0'}
         self.client.post('/', data=data)
         self.client.post('/', data=data)
         self.assertEqual(session.post.call_count, 1)
         for key, value in [('safesearch', '2'), ('category', 'news'), ('page', '1')]:
             self.client.post('/', data={**data, key: value})
-        self.assertEqual(session.post.call_count, 4)
+        self.assertEqual(session.post.call_count, 3)  # Page 2 is already pooled.
         with patch('cache.time.monotonic', return_value=module.time.monotonic() + 61):
             self.client.post('/', data=data)
-        self.assertEqual(session.post.call_count, 5)
+        self.assertEqual(session.post.call_count, 4)
 
     @patch('app.requests.Session')
     def test_partial_results_are_cached_with_warning(self, factory):
         session = factory.return_value.__enter__.return_value
         session.post.return_value.status_code = 200
-        session.post.return_value.json.return_value = {'results': [{'url': 'https://example.com'}], 'unresponsive_engines': [['bing', 'timeout']]}
+        session.post.return_value.json.return_value = {'results': [{'url': f'https://example.com/{i}'} for i in range(20)], 'unresponsive_engines': [['bing', 'timeout']]}
         for _ in range(2):
             self.client.post('/', data={'q': 'sample'})
         self.assertEqual(session.post.call_count, 1)
@@ -136,14 +138,14 @@ class PortalTests(unittest.TestCase):
     def test_numbered_pages_are_post_forms_and_bounded(self, factory):
         session = factory.return_value.__enter__.return_value
         session.post.return_value.status_code = 200
-        session.post.return_value.json.return_value = {'results': [{'url': 'https://example.com'}]}
+        session.post.return_value.json.side_effect = lambda: {'results': [{'url': f'https://example.com/{i}'} for i in range(1000)]}
         first = self.client.post('/', data={'q': 'sample'}).get_data(as_text=True)
         for number in range(1, 6):
             self.assertIn('aria-label="' + str(number) + 'ページ目"', first)
         self.assertIn('aria-current="page" disabled>1</button>', first)
         last = self.client.post('/', data={'q': 'sample', 'page': '9'}).get_data(as_text=True)
         self.assertNotIn('次へ →', last)
-        self.assertIn('aria-current="page" disabled>10</button>', last)
+        self.assertIn('取得済みのページを表示', last)
         self.assertNotIn('name="page" value="10"', last)
 
     @patch('app.requests.Session')
@@ -190,7 +192,7 @@ class PortalTests(unittest.TestCase):
         session.post.return_value.json.return_value = {'results': []}
         response = self.client.post('/', data={'q': 'sample', 'kind': 'images'}, headers={'Origin': 'null', 'Sec-Fetch-Site': 'same-origin'})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(session.post.call_args.kwargs['data']['categories'], 'images')
+        self.assertIn('google images', session.post.call_args.kwargs['data']['engines'].split(','))
         self.assertEqual(self.client.post('/', data={'q': 'sample'}, headers={'Origin': 'null'}).status_code, 403)
         self.assertEqual(self.client.post('/', data={'q': 'sample'}, headers={'Origin': 'null', 'Sec-Fetch-Site': 'cross-site'}).status_code, 403)
 

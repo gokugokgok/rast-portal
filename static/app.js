@@ -3,8 +3,8 @@ const output = document.querySelector('#results');
 const search = document.querySelector('#search');
 const queryInput = document.querySelector('#q');
 const categoryInput = document.querySelector('#category');
-const safeInput = document.querySelector('#safesearch');
 const settings = document.querySelector('#settings');
+const searchOptions = ['safesearch', 'per_page', 'region', 'mode', 'match'].map(name => document.querySelector(`[name="${name}"][form="search"]`));
 let pending = null;
 let wikiPending = null;
 let lastOverview = null;
@@ -217,13 +217,13 @@ async function submit(form) {
   currentQuery = query;
   queryInput.value = query;
   selectCategory(String(data.get('category') || 'all'));
-  safeInput.value = String(data.get('safesearch') || '1');
+  searchOptions.forEach(input => { if (data.has(input.name)) input.value = String(data.get(input.name)); });
   settings.open = false;
   document.body.classList.add('has-results');
   output.setAttribute('aria-busy', 'true');
   search.classList.add('loading');
   try {
-    const cacheKey = [data.get('category'), data.get('safesearch'), data.get('page') || '0'].join(':');
+    const cacheKey = JSON.stringify([data.get('category'), ...searchOptions.map(input => data.get(input.name)), data.get('page') || '0']);
     const cached = pageCache.get(cacheKey);
     let markup;
     if (cached && cached.expires > Date.now()) markup = cached.markup;
@@ -232,9 +232,18 @@ async function submit(form) {
         headers: {'X-Portal-Request': '1'}, cache: 'no-store', credentials: 'omit',
         referrerPolicy: 'no-referrer', signal: controller.signal});
       markup = await response.text();
-      if (pending === controller && response.ok && markup.includes('class="search-state"')) {
-        if (pageCache.size >= 12) pageCache.delete(pageCache.keys().next().value);
-        pageCache.set(cacheKey, {markup, expires: Date.now() + 45000});
+      const parsed = document.createElement('template');
+      parsed.innerHTML = markup;
+      const fragment = parsed.content.querySelector('.search-state');
+      if (pending === controller && response.ok && fragment && fragment.dataset.limited !== '1' && fragment.dataset.page === String(data.get('page') || '0')) {
+        const assetCount = new Set([...markup.matchAll(/\/(?:media|icon)\/[A-Za-z0-9_-]{32}/g)].map(match => match[0])).size;
+        pageCache.delete(cacheKey);
+        // A 100-image page has many opaque IDs. Keep fewer large pages so a
+        // cached fragment does not point at IDs evicted from the server map.
+        while (pageCache.size && (pageCache.size >= 12 || [...pageCache.values()].reduce((sum, entry) => sum + entry.assetCount, 0) + assetCount > 400)) {
+          pageCache.delete(pageCache.keys().next().value);
+        }
+        if (assetCount <= 400) pageCache.set(cacheKey, {markup, assetCount, expires: Date.now() + 45000});
       }
     }
     if (pending !== controller) return;
@@ -262,12 +271,12 @@ document.querySelectorAll('.home-chip').forEach(button => button.addEventListene
   selectCategory(button.dataset.category);
   if (queryInput.value.trim()) submit(search); else queryInput.focus();
 }));
-safeInput.addEventListener('change', () => {
+searchOptions.forEach(input => input.addEventListener('change', () => {
   if (currentQuery) {
     queryInput.value = currentQuery;
     submit(search);
   }
-});
+}));
 document.querySelector('#theme').addEventListener('change', event => {
   document.documentElement.dataset.theme = event.target.value;
 });

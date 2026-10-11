@@ -1,4 +1,6 @@
 import html
+import json
+from pathlib import Path
 import os
 import re
 import threading
@@ -10,6 +12,7 @@ from flask import Flask, Response, redirect, render_template, request
 from media import register_image, load_image, ImageBusy
 from cache import MemoryCache
 from favicons import register_icon, load_icon
+from searching import search_results, search_cache, SearchError, COUNTS, MODES
 
 app = Flask(__name__)
 app.config.update(MAX_CONTENT_LENGTH=8192)
@@ -18,7 +21,7 @@ _window = 0
 _used = 0
 CATEGORIES = {'all': 'general', 'images': 'images', 'videos': 'videos', 'news': 'news'}
 TABS = [('all', 'すべて'), ('images', '画像'), ('videos', '動画'), ('news', 'ニュース')]
-search_cache = MemoryCache(ttl=60, max_entries=32, max_bytes=2 * 1024 * 1024)
+REGIONS = dict(json.loads(Path(__file__).with_name("regions.json").read_text()))
 wiki_cache = MemoryCache(ttl=300, max_entries=64, max_bytes=512 * 1024)
 _wiki_slots = threading.BoundedSemaphore(2)
 
@@ -93,7 +96,11 @@ def privacy_headers(response):
 def show(error=None, status=200, **context):
     context.setdefault('category', 'all')
     context.setdefault('safesearch', '1')
-    context['tabs'] = TABS
+    context.setdefault('per_page', 20)
+    context.setdefault('region', 'ja-JP')
+    context.setdefault('mode', 'balanced')
+    context.setdefault('match', 'normal')
+    context.update(tabs=TABS, counts=COUNTS, regions=REGIONS, modes=MODES)
     template = 'results.html' if request.headers.get('X-Portal-Request') == '1' else 'index.html'
     return render_template(template, error=error, **context), status
 
@@ -113,33 +120,19 @@ def index():
         return show('ページ指定が無効です。', 400)
     category = request.form.get('kind') or request.form.get('category', 'all')
     safesearch = request.form.get('safesearch', '1')
-    if category not in CATEGORIES or safesearch not in ('0', '1', '2'):
+    try:
+        per_page = int(request.form.get('per_page', '20'))
+    except ValueError:
+        return show('表示件数が無効です。', 400)
+    region = request.form.get('region', 'ja-JP')
+    mode = request.form.get('mode', 'balanced')
+    match = request.form.get('match', 'normal')
+    if (category not in CATEGORIES or safesearch not in ('0', '1', '2') or per_page not in COUNTS
+            or region not in REGIONS or mode not in MODES or match not in ('normal', 'phrase')):
         return show('検索設定が無効です。', 400)
     try:
-        payload = search_cache.get(query, category, safesearch, page)
-        if payload is None:
-            if not budget_available():
-                return show('アクセスが集中しています。1分ほど待って再試行してください。', 429)
-            # No user IP, browser headers, cookies or referrer forwarded upstream.
-            with requests.Session() as client:
-                client.trust_env = False
-                upstream = client.post(
-                    'http://127.0.0.1:8888/search',
-                    headers={'Accept': 'application/json'},
-                    data={'q': query, 'format': 'json', 'language': 'ja-JP',
-                          'categories': CATEGORIES[category], 'pageno': page + 1, 'safesearch': safesearch},
-                    timeout=(1, 5), allow_redirects=False,
-                )
-            if upstream.status_code == 429:
-                return show('検索サービスの利用上限に達しました。時間を置いて再試行してください。', 429)
-            if upstream.status_code != 200:
-                return show('検索サービスに接続できませんでした。', 502)
-            raw = upstream.json()
-            # Do not cache the provider's query, timing or request metadata.
-            payload = {'results': raw.get('results', [])[:60],
-                       'unresponsive_engines': bool(raw.get('unresponsive_engines'))}
-            if payload['results']:
-                search_cache.put(payload, query, category, safesearch, page)
+        payload = search_results(query, category, safesearch, region, mode, match, page, per_page, budget_available)
+        page = payload['page']
         results = []
         for item in payload.get('results', []):
             if not isinstance(item, dict):
@@ -149,7 +142,7 @@ def index():
             if parsed is None:
                 continue
             kind = 'image' if item.get('template') == 'images.html' or category == 'images' else 'video' if item.get('template') == 'videos.html' or category == 'videos' else 'web'
-            thumbnail = register_image(item.get('thumbnail_src'), item.get('thumbnail'), item.get('img_src'), thumbnail=True)
+            thumbnail = register_image(item.get('thumbnail_src'), item.get('thumbnail'), item.get('img_src'), thumbnail=True) if kind in ('image', 'video') else ''
             results.append({'url': url, 'host': parsed.hostname, 'icon': register_icon(url),
                             'title': plain_text(item.get('title') or url),
                             'description': plain_text(item.get('content')),
@@ -159,19 +152,25 @@ def index():
                             'duration': plain_text(item.get('length') or item.get('duration')),
                             'date': plain_text(item.get('publishedDate') or item.get('pubdate'))[:10],
                             'engines': ', '.join(str(x) for x in item.get('engines', []) if isinstance(x, str))})
-            if len(results) >= 60:
+            if len(results) >= per_page:
                 break
-        # The JSON API has no definitive has-next-page flag.
-        more = bool(results) and page < 9
-        failed = bool(payload.get('unresponsive_engines', []))
-        warning = '一部の検索元が応答していません。取得できた結果を表示しています。' if failed and results else None
-        if failed and not results:
-            warning = '検索元が応答しませんでした。少し待って再試行してください。'
-        end = 10 if more else page + 1
-        start = max(0, min(page - 2, end - 5))
-        page_numbers = range(start, min(end, start + 5)) if results or page > 0 else []
-        return show(results=results, searched=True, q=query, page=page, more=more, warning=warning,
-                    category=category, safesearch=safesearch, page_numbers=page_numbers)
+        failed = bool(payload['unresponsive_engines'])
+        warnings = []
+        if failed:
+            warnings.append('一部の検索元が応答していません。取得できた結果を表示しています。' if results else
+                            '検索元が応答しませんでした。少し待って再試行してください。')
+        if payload['limited']:
+            warnings.append('今回取得できた分を表示しています。件数を増やすには検索し直すか「広く検索」を試してください。')
+        if payload['recovered']:
+            warnings.append('指定ページの取得範囲に届かなかったため、取得済みのページを表示しています。')
+        return show(results=results, searched=True, q=query, page=page, more=payload['more'],
+                    warning=' '.join(warnings) or None, category=category, safesearch=safesearch,
+                    page_numbers=payload['page_numbers'], per_page=per_page, region=region, mode=mode,
+                    match=match, limited=payload['limited'])
+    except SearchError as error:
+        messages = {429: 'アクセスが集中しています。1分ほど待って再試行してください。',
+                    503: '検索処理が混雑しています。少し待って再試行してください。'}
+        return show(messages.get(error.status, '検索サービスに接続できませんでした。'), error.status)
     except (requests.RequestException, ValueError, TypeError, AttributeError):
         # Never print provider errors: those can contain the query or credentials.
         return show('検索に失敗しました。少し待って再試行してください。', 502)
