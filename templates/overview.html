@@ -1,11 +1,12 @@
+{% from 'icons.html' import favicon %}
 {% if wiki %}
-<div class="wiki-heading"><span class="wiki-mark" aria-hidden="true">W</span><span>Wikipedia<span class="wiki-subtitle">フリー百科事典</span></span></div>
+<div class="wiki-heading"><span class="wiki-mark">{{ favicon(site_icon("https://ja.wikipedia.org/")) }}</span><span>Wikipedia<span class="wiki-subtitle">フリー百科事典</span></span></div>
 <h2>{{ wiki.title }}</h2>
 <span class="wiki-section-label">概要</span>
 <p class="wiki-extract">{{ wiki.extract }}</p>
 <a class="wiki-more" href="{{ wiki.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Wikipediaで詳しく読む ↗</a>
 <p class="wiki-attribution">出典：<a href="{{ wiki.url }}" target="_blank" rel="noopener noreferrer">Wikipedia「{{ wiki.title }}」</a><br>本文の抜粋 · <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a></p>
 {% else %}
-<div class="wiki-heading"><span class="wiki-mark" aria-hidden="true">W</span><span>Wikipedia<span class="wiki-subtitle">関連する記事の概要</span></span></div>
+<div class="wiki-heading"><span class="wiki-mark">{{ favicon(site_icon("https://ja.wikipedia.org/")) }}</span><span>Wikipedia<span class="wiki-subtitle">関連する記事の概要</span></span></div>
 <p class="wiki-empty">{{ wiki_error or '関連するWikipediaの概要が見つかりませんでした。' }}</p>
 {% endif %}

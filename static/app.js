@@ -12,14 +12,21 @@ let currentQuery = queryInput.value;
 let mediaController = new AbortController();
 let previewController = null;
 let imageObserver = null;
+let iconObserver = null;
 const assets = new Map();
 const imageJobs = [];
 let imageActive = 0;
+const iconJobs = [];
+let iconActive = 0;
+const pageCache = new Map();
 function resetMedia() {
   mediaController.abort(); mediaController = new AbortController();
   if (previewController) previewController.abort();
   if (imageObserver) imageObserver.disconnect();
+  if (iconObserver) iconObserver.disconnect();
+  iconObserver = null;
   imageJobs.length = 0;
+  iconJobs.length = 0;
   assets.forEach(entry => { if (entry.url) URL.revokeObjectURL(entry.url); });
   assets.clear();
   const dialog = document.querySelector('#image-dialog');
@@ -43,7 +50,7 @@ function imageAsset(src, signal) {
       if (!response.ok) throw new Error('Image unavailable');
       const blob = await response.blob();
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      if (!/^image\/(png|jpeg|gif|webp|avif)$/.test(blob.type)) throw new Error('Unsupported image');
+      if (!/^image\/(png|jpeg|gif|webp|avif|x-icon|vnd\.microsoft\.icon)$/.test(blob.type)) throw new Error('Unsupported image');
       entry.url = URL.createObjectURL(blob);
       return entry.url;
     }
@@ -87,6 +94,37 @@ function attachImages() {
     }), {rootMargin: '300px'});
     output.querySelectorAll('img[data-src]').forEach(img => imageObserver.observe(img.parentElement));
   } else output.querySelectorAll('img[data-src]').forEach(enqueue);
+}
+function pumpIcons() {
+  while (iconActive < 2 && iconJobs.length) {
+    const {img, signal} = iconJobs.shift();
+    if (signal.aborted || !img.isConnected) continue;
+    iconActive++;
+    imageAsset(img.dataset.icon, signal).then(async src => {
+      if (signal.aborted || !img.isConnected) return;
+      img.src = src; await img.decode();
+      if (signal.aborted || !img.isConnected) return;
+      img.hidden = false; img.parentElement.classList.add('has-icon');
+    }).catch(() => {}).finally(() => { iconActive--; pumpIcons(); });
+  }
+}
+function attachIcons(root = output) {
+  const signal = mediaController.signal;
+  if ('IntersectionObserver' in window && !iconObserver) {
+    iconObserver = new IntersectionObserver(entries => entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        iconObserver.unobserve(entry.target);
+        const img = entry.target.querySelector('img[data-icon]');
+        if (img) { iconJobs.push({img, signal}); pumpIcons(); }
+      }
+    }), {rootMargin: '200px'});
+  }
+  root.querySelectorAll('img[data-icon]:not([data-queued])').forEach(img => {
+    img.dataset.queued = 'true';
+    if (iconObserver) iconObserver.observe(img.parentElement);
+    else iconJobs.push({img, signal});
+  });
+  pumpIcons();
 }
 async function openPreview(button) {
   if (previewController) previewController.abort();
@@ -133,6 +171,7 @@ async function loadOverview(query) {
   if (!panel) return;
   if (lastOverview && lastOverview.query === query) {
     panel.innerHTML = lastOverview.markup;
+    attachIcons(panel);
     return;
   }
   const controller = new AbortController();
@@ -144,6 +183,7 @@ async function loadOverview(query) {
     const markup = await response.text();
     if (wikiPending !== controller || currentQuery !== query || !panel.isConnected) return;
     panel.innerHTML = markup;
+    attachIcons(panel);
     if (response.ok) lastOverview = {query, markup};
   } catch (error) {
     if (error.name !== 'AbortError' && wikiPending === controller && panel.isConnected) {
@@ -173,7 +213,7 @@ async function submit(form) {
   const query = String(data.get('q') || '').trim();
   if (!query) { pending = null; queryInput.focus(); return; }
   resetMedia();
-  if (lastOverview && lastOverview.query !== query) lastOverview = null;
+  if (currentQuery !== query) { lastOverview = null; pageCache.clear(); }
   currentQuery = query;
   queryInput.value = query;
   selectCategory(String(data.get('category') || 'all'));
@@ -183,16 +223,27 @@ async function submit(form) {
   output.setAttribute('aria-busy', 'true');
   search.classList.add('loading');
   try {
-    const response = await fetch('/', {method: 'POST', body: data,
-      headers: {'X-Portal-Request': '1'}, cache: 'no-store', credentials: 'omit',
-      referrerPolicy: 'no-referrer', signal: controller.signal});
-    const markup = await response.text();
+    const cacheKey = [data.get('category'), data.get('safesearch'), data.get('page') || '0'].join(':');
+    const cached = pageCache.get(cacheKey);
+    let markup;
+    if (cached && cached.expires > Date.now()) markup = cached.markup;
+    else {
+      const response = await fetch('/', {method: 'POST', body: data,
+        headers: {'X-Portal-Request': '1'}, cache: 'no-store', credentials: 'omit',
+        referrerPolicy: 'no-referrer', signal: controller.signal});
+      markup = await response.text();
+      if (pending === controller && response.ok && markup.includes('class="search-state"')) {
+        if (pageCache.size >= 12) pageCache.delete(pageCache.keys().next().value);
+        pageCache.set(cacheKey, {markup, expires: Date.now() + 45000});
+      }
+    }
     if (pending !== controller) return;
     // All text/attributes are escaped server-side. Only this site's fragments.
     output.innerHTML = markup;
     loadOverview(query);
     queryInput.blur();
     attachImages();
+    attachIcons();
     window.scrollTo({top: 0, behavior: 'instant'});
   } catch (error) {
     if (error.name !== 'AbortError' && pending === controller) output.textContent = '接続に失敗しました。もう一度お試しください。';
@@ -227,6 +278,7 @@ function clearScreen() {
   if (wikiPending) wikiPending.abort();
   wikiPending = null;
   lastOverview = null;
+  pageCache.clear();
   pending = null;
   currentQuery = '';
   queryInput.value = '';
@@ -279,3 +331,4 @@ window.addEventListener('pagehide', clearScreen);
 window.addEventListener('pageshow', event => { if (event.persisted) clearScreen(); });
 if (currentQuery) loadOverview(currentQuery);
 attachImages();
+attachIcons();

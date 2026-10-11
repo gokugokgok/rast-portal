@@ -62,7 +62,7 @@ def valid_url(value):
         return None
 
 
-def register_image(*urls):
+def register_image(*urls, thumbnail=False):
     sources = tuple(dict.fromkeys(source for url in urls if (source := normalize_source(url))))[:3]
     if not sources:
         return ''
@@ -74,7 +74,7 @@ def register_image(*urls):
             _images.pop(key, None)
         while len(_images) >= MAX_IMAGES:
             _images.popitem(last=False)
-        _images[token] = (sources, now + TTL)
+        _images[token] = ((sources, thumbnail), now + TTL)
     return '/media/' + token
 
 
@@ -100,7 +100,7 @@ def image_mime(data):
     return None
 
 
-def fetch_public_image(url, deadline=None):
+def fetch_public_image(url, deadline=None, max_bytes=MAX_BYTES, allow_icon=False):
     """Pin the validated address, including on redirects, to prevent rebinding."""
     deadline = deadline or time.monotonic() + 15
     for _ in range(3):
@@ -142,7 +142,7 @@ def fetch_public_image(url, deadline=None):
                 if response.status != 200:
                     raise ValueError('image unavailable')
                 length = response.headers.get('Content-Length')
-                if length and int(length) > MAX_BYTES:
+                if length and int(length) > max_bytes:
                     raise ValueError('image too large')
                 data = bytearray()
                 while True:
@@ -152,10 +152,12 @@ def fetch_public_image(url, deadline=None):
                     if not chunk:
                         break
                     data.extend(chunk)
-                    if len(data) > MAX_BYTES:
+                    if len(data) > max_bytes:
                         raise ValueError('image too large')
                 data = bytes(data)
                 mime = image_mime(data)
+                if allow_icon and data.startswith(b'\x00\x00\x01\x00') and len(data) >= 22:
+                    mime = 'image/x-icon'
                 if mime is None:
                     raise ValueError('unsupported image')
                 return data, mime
@@ -169,7 +171,7 @@ def fetch_public_image(url, deadline=None):
     raise ValueError('too many redirects')
 
 
-def cached_image(url, deadline):
+def cached_image(url, deadline, fetch_timeout=15):
     global _cache_bytes
     key = hashlib.sha256(url.encode()).digest()
     while True:
@@ -199,7 +201,7 @@ def cached_image(url, deadline):
                 data = base64.b64decode(url.split(',', 1)[1], validate=True)
                 result = (data, image_mime(data))
             else:
-                result = fetch_public_image(url, deadline=min(deadline, time.monotonic() + 15))
+                result = fetch_public_image(url, deadline=min(deadline, time.monotonic() + fetch_timeout))
         except (OSError, ValueError, urllib3.exceptions.HTTPError, UnicodeError):
             result = None
         with _lock:
@@ -224,12 +226,12 @@ def load_image(token):
         if not entry or entry[1] <= time.monotonic():
             _images.pop(token, None)
             return None
-        sources = entry[0]
-    deadline = time.monotonic() + 24
+        sources, thumbnail = entry[0]
+    deadline = time.monotonic() + (6 if thumbnail else 24)
     for source in sources:
         if time.monotonic() >= deadline:
             return None
-        image = cached_image(source, deadline)
+        image = cached_image(source, deadline, fetch_timeout=3 if thumbnail else 15)
         if image is not None:
             return image
     return None

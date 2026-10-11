@@ -119,18 +119,18 @@ class PortalTests(unittest.TestCase):
         for key, value in [('safesearch', '2'), ('category', 'news'), ('page', '1')]:
             self.client.post('/', data={**data, key: value})
         self.assertEqual(session.post.call_count, 4)
-        with patch('cache.time.monotonic', return_value=module.time.monotonic() + 31):
+        with patch('cache.time.monotonic', return_value=module.time.monotonic() + 61):
             self.client.post('/', data=data)
         self.assertEqual(session.post.call_count, 5)
 
     @patch('app.requests.Session')
-    def test_failed_search_is_not_cached(self, factory):
+    def test_partial_results_are_cached_with_warning(self, factory):
         session = factory.return_value.__enter__.return_value
         session.post.return_value.status_code = 200
         session.post.return_value.json.return_value = {'results': [{'url': 'https://example.com'}], 'unresponsive_engines': [['bing', 'timeout']]}
         for _ in range(2):
             self.client.post('/', data={'q': 'sample'})
-        self.assertEqual(session.post.call_count, 2)
+        self.assertEqual(session.post.call_count, 1)
 
     @patch('app.requests.Session')
     def test_numbered_pages_are_post_forms_and_bounded(self, factory):

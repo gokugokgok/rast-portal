@@ -1,3 +1,4 @@
+{% from 'icons.html' import favicon %}
 {% if error %}<div class="message error" role="alert">{{ error }}</div>{% endif %}
 {% if searched %}
 <section class="search-state" data-category="{{ category }}" data-safe="{{ safesearch }}">
@@ -14,12 +15,12 @@
       {% if category == 'images' %}
       <article class="image-card">
         {% if result.thumbnail %}<button type="button" class="image-open image-tile" data-preview="{{ result.preview or result.thumbnail }}" data-fallback="{{ result.thumbnail }}" data-title="{{ result.title }}" data-host="{{ result.host }}" data-url="{{ result.url }}" aria-label="画像を表示：{{ result.title }}"><img data-src="{{ result.thumbnail }}" alt="{{ result.title }}" hidden decoding="async" referrerpolicy="no-referrer"><noscript><img src="{{ result.thumbnail }}" alt="{{ result.title }}" loading="lazy" referrerpolicy="no-referrer"></noscript><span class="resolution">{{ result.resolution }}</span></button>{% else %}<a class="image-tile no-image" href="{{ result.url }}" target="_blank" rel="noopener noreferrer">画像を掲載サイトで見る ↗</a>{% endif %}
-        <p class="image-host">{{ result.host }}</p><h2><a href="{{ result.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{{ result.title }}</a></h2>
+        <p class="image-host">{{ favicon(result.icon, true) }}<span>{{ result.host }}</span></p><h2><a href="{{ result.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{{ result.title }}</a></h2>
       </article>
       {% else %}
       <article class="result-card{% if category == 'videos' or result.kind == 'video' %} video-card{% endif %}">
         {% if category == 'videos' or result.kind == 'video' %}<a class="video-thumb{% if not result.thumbnail %} no-image{% endif %}" href="{{ result.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" aria-label="動画を開く：{{ result.title }}">{% if result.thumbnail %}<img data-src="{{ result.thumbnail }}" alt="" hidden decoding="async" referrerpolicy="no-referrer"><noscript><img src="{{ result.thumbnail }}" alt="" loading="lazy" referrerpolicy="no-referrer"></noscript>{% endif %}<span class="play-icon">▶</span>{% if result.duration %}<span class="duration">{{ result.duration }}</span>{% endif %}</a>{% endif %}
-        <div class="result-text"><div class="result-source"><span class="site-avatar" aria-hidden="true">{{ result.host[:1]|upper }}</span><span><span class="site-name">{{ result.host }}</span><span class="site-url">{{ result.url[:110] }}</span></span></div><h2><a href="{{ result.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{{ result.title }}</a></h2><p class="description">{% if result.date %}<span class="date">{{ result.date }} · </span>{% endif %}{{ result.description }}</p></div>
+        <div class="result-text"><div class="result-source">{{ favicon(result.icon) }}<span><span class="site-name">{{ result.host }}</span><span class="site-url">{{ result.url[:110] }}</span></span></div><h2><a href="{{ result.url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">{{ result.title }}</a></h2><p class="description">{% if result.date %}<span class="date">{{ result.date }} · </span>{% endif %}{{ result.description }}</p></div>
       </article>
       {% endif %}
       {% else %}<div class="empty-state"><span class="empty-icon">⌕</span><h2>結果が見つかりませんでした</h2><p>別の言葉や検索の種類で試してください。</p></div>{% endfor %}
@@ -30,6 +31,6 @@
       {% if more %}<form method="post" action="/" class="page-form"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="category" value="{{ category }}"><input type="hidden" name="safesearch" value="{{ safesearch }}"><input type="hidden" name="page" value="{{ page + 1 }}"><button>次へ →</button></form>{% endif %}
     </nav>
   </div>
-  {% if category == 'all' %}<aside class="wiki-panel" aria-label="Wikipediaの概要" aria-live="polite"><div id="wiki-content"><div class="wiki-heading"><span class="wiki-mark" aria-hidden="true">W</span><span>Wikipedia<span class="wiki-subtitle">関連する記事の概要</span></span></div><p class="wiki-loading" role="status">概要を読み込み中…</p><noscript><p class="wiki-empty">概要の表示にはJavaScriptを有効にしてください。</p></noscript></div></aside></div>{% endif %}
+  {% if category == 'all' %}<aside class="wiki-panel" aria-label="Wikipediaの概要" aria-live="polite"><div id="wiki-content"><div class="wiki-heading"><span class="wiki-mark">{{ favicon(site_icon("https://ja.wikipedia.org/")) }}</span><span>Wikipedia<span class="wiki-subtitle">関連する記事の概要</span></span></div><p class="wiki-loading" role="status">概要を読み込み中…</p><noscript><p class="wiki-empty">概要の表示にはJavaScriptを有効にしてください。</p></noscript></div></aside></div>{% endif %}
 </section>
 {% endif %}

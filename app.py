@@ -9,6 +9,7 @@ import requests
 from flask import Flask, Response, redirect, render_template, request
 from media import register_image, load_image, ImageBusy
 from cache import MemoryCache
+from favicons import register_icon, load_icon
 
 app = Flask(__name__)
 app.config.update(MAX_CONTENT_LENGTH=8192)
@@ -17,7 +18,7 @@ _window = 0
 _used = 0
 CATEGORIES = {'all': 'general', 'images': 'images', 'videos': 'videos', 'news': 'news'}
 TABS = [('all', 'すべて'), ('images', '画像'), ('videos', '動画'), ('news', 'ニュース')]
-search_cache = MemoryCache(ttl=30, max_entries=32, max_bytes=2 * 1024 * 1024)
+search_cache = MemoryCache(ttl=60, max_entries=32, max_bytes=2 * 1024 * 1024)
 wiki_cache = MemoryCache(ttl=300, max_entries=64, max_bytes=512 * 1024)
 _wiki_slots = threading.BoundedSemaphore(2)
 
@@ -127,7 +128,7 @@ def index():
                     headers={'Accept': 'application/json'},
                     data={'q': query, 'format': 'json', 'language': 'ja-JP',
                           'categories': CATEGORIES[category], 'pageno': page + 1, 'safesearch': safesearch},
-                    timeout=(2, 8), allow_redirects=False,
+                    timeout=(1, 5), allow_redirects=False,
                 )
             if upstream.status_code == 429:
                 return show('検索サービスの利用上限に達しました。時間を置いて再試行してください。', 429)
@@ -137,7 +138,7 @@ def index():
             # Do not cache the provider's query, timing or request metadata.
             payload = {'results': raw.get('results', [])[:60],
                        'unresponsive_engines': bool(raw.get('unresponsive_engines'))}
-            if payload['results'] and not payload['unresponsive_engines']:
+            if payload['results']:
                 search_cache.put(payload, query, category, safesearch, page)
         results = []
         for item in payload.get('results', []):
@@ -148,8 +149,8 @@ def index():
             if parsed is None:
                 continue
             kind = 'image' if item.get('template') == 'images.html' or category == 'images' else 'video' if item.get('template') == 'videos.html' or category == 'videos' else 'web'
-            thumbnail = register_image(item.get('thumbnail_src'), item.get('thumbnail'), item.get('img_src'))
-            results.append({'url': url, 'host': parsed.hostname,
+            thumbnail = register_image(item.get('thumbnail_src'), item.get('thumbnail'), item.get('img_src'), thumbnail=True)
+            results.append({'url': url, 'host': parsed.hostname, 'icon': register_icon(url),
                             'title': plain_text(item.get('title') or url),
                             'description': plain_text(item.get('content')),
                             'kind': kind, 'thumbnail': thumbnail,
@@ -231,6 +232,24 @@ def media(token):
         return '', 404
     data, mime = image
     return Response(data, mimetype=mime, headers={'Cross-Origin-Resource-Policy': 'same-origin'})
+
+
+@app.get('/icon/<token>')
+def icon(token):
+    if not re.fullmatch(r'[A-Za-z0-9_-]{32}', token):
+        return '', 404
+    try:
+        result = load_icon(token)
+    except ImageBusy:
+        return Response('', status=503, headers={'Retry-After': '1'})
+    if result is None:
+        return '', 404
+    return Response(result[0], mimetype=result[1], headers={'Cross-Origin-Resource-Policy': 'same-origin'})
+
+
+@app.context_processor
+def icon_template_helper():
+    return {'site_icon': register_icon}
 
 
 @app.get('/health')

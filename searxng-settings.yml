@@ -41,8 +41,8 @@ server:
   image_proxy: false
 
 outgoing:
-  request_timeout: 3.5
-  max_request_timeout: 5.0
+  request_timeout: 2.5
+  max_request_timeout: 3.0
 
 engines:
   - name: duckduckgo
