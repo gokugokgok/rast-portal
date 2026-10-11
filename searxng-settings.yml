@@ -1,0 +1,79 @@
+use_default_settings:
+  engines:
+    keep_only:
+      - duckduckgo
+      - brave
+      - google
+      - bing
+      - duckduckgo images
+      - brave.images
+      - google images
+      - bing images
+      - duckduckgo videos
+      - brave.videos
+      - google videos
+      - bing videos
+      - duckduckgo news
+      - brave.news
+      - google news
+      - bing news
+
+general:
+  debug: false
+  instance_name: Portal
+  enable_metrics: false
+
+search:
+  safe_search: 1
+  autocomplete: ""
+  favicon_resolver: ""
+  default_lang: ja-JP
+  formats:
+    - json
+
+server:
+  secret_key: "replaced-by-startup-environment"
+  bind_address: 127.0.0.1
+  port: 8888
+  method: POST
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+outgoing:
+  request_timeout: 3.5
+  max_request_timeout: 5.0
+
+engines:
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: duckduckgo images
+    disabled: false
+  - name: brave.images
+    disabled: false
+  - name: google images
+    disabled: false
+  - name: bing images
+    disabled: false
+  - name: duckduckgo videos
+    disabled: false
+  - name: brave.videos
+    disabled: false
+  - name: google videos
+    disabled: false
+  - name: bing videos
+    disabled: false
+  - name: duckduckgo news
+    disabled: false
+  - name: brave.news
+    disabled: false
+  - name: google news
+    disabled: false
+  - name: bing news
+    disabled: false
