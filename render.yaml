@@ -5,3 +5,6 @@ services:
     plan: free
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
+    envVars:
+      - key: PORTAL_AUTH_SECRET
+        generateValue: true

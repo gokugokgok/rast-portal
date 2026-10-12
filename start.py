@@ -12,6 +12,7 @@ def main():
     os.chdir(Path(__file__).resolve().parent)
     environment = os.environ.copy()
     environment['SEARXNG_SECRET'] = secrets.token_hex(32)
+    environment.setdefault('PORTAL_AUTH_SECRET', secrets.token_urlsafe(48))
     environment.setdefault('SEARXNG_SETTINGS_PATH', str(Path('searxng-settings.yml').resolve()))
     children = []
     stopping = False

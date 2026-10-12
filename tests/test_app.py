@@ -1,3 +1,4 @@
+from auth_test_support import authorized_client
 import os
 import unittest
 from unittest.mock import MagicMock, patch
@@ -7,7 +8,7 @@ import app as module
 
 class PortalTests(unittest.TestCase):
     def setUp(self):
-        self.client = module.app.test_client()
+        self.client = authorized_client(module.app)
         module._used = 0
         module.search_cache.clear()
         module.wiki_cache.clear()
@@ -19,6 +20,7 @@ class PortalTests(unittest.TestCase):
         self.assertIn('no-store', response.headers['Cache-Control'])
         self.assertEqual(response.headers['Referrer-Policy'], 'no-referrer')
         self.assertNotIn('Set-Cookie', response.headers)
+        self.assertRegex(response.get_data(as_text=True), r'<input id="q"[^>]* autofocus>')
 
     def test_get_query_is_removed(self):
         response = self.client.get('/?q=private-test')
@@ -44,6 +46,7 @@ class PortalTests(unittest.TestCase):
         self.assertIn(b'rel="noopener noreferrer"', response.data)
         self.assertIn(b'name="page" value="2"', response.data)
         self.assertNotIn('Set-Cookie', response.headers)
+        self.assertNotIn(b' autofocus', response.data)
         args, kwargs = client.post.call_args
         self.assertNotIn('?', args[0])
         self.assertEqual(args[0], 'http://127.0.0.1:8888/search')

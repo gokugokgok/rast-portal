@@ -1,3 +1,4 @@
+from auth_test_support import authorized_client
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +15,7 @@ def page_result(number, size=30):
 
 class SearchSettingsTests(unittest.TestCase):
     def setUp(self):
-        self.client = app.app.test_client()
+        self.client = authorized_client(app.app)
         searching.search_cache.clear()
         app._used = 0
         self.factory_patch = patch('searching.requests.Session')

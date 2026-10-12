@@ -1,3 +1,4 @@
+from auth_test_support import authorized_client
 import unittest
 from unittest.mock import patch, MagicMock
 import app
@@ -40,14 +41,14 @@ class FaviconTests(unittest.TestCase):
     @patch('app.load_icon')
     def test_icon_endpoint_headers_and_busy_response(self, loader):
         loader.return_value = (b'\x89PNG\r\n\x1a\n', 'image/png')
-        response = app.app.test_client().get('/icon/' + 'a' * 32)
+        response = authorized_client(app.app).get('/icon/' + 'a' * 32)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers['Referrer-Policy'], 'no-referrer')
         self.assertEqual(response.headers['Cross-Origin-Resource-Policy'], 'same-origin')
         self.assertIn('no-store', response.headers['Cache-Control'])
         self.assertNotIn('Set-Cookie', response.headers)
         loader.side_effect = media.ImageBusy
-        self.assertEqual(app.app.test_client().get('/icon/' + 'a' * 32).status_code, 503)
+        self.assertEqual(authorized_client(app.app).get('/icon/' + 'a' * 32).status_code, 503)
 
     @patch('media.socket.getaddrinfo')
     @patch('media.urllib3.HTTPSConnectionPool')

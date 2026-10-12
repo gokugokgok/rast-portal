@@ -21,7 +21,13 @@ let imageActive = 0;
 const iconJobs = [];
 let iconActive = 0;
 const pageCache = new Map();
-function resetMedia() {
+function requireAccess(response) {
+  if (response.status === 401 && response.headers.get('X-Portal-Auth') === 'required') {
+    clearScreen(); window.location.replace('/');
+    throw new Error('Access expired');
+  }
+}
+function resetMedia(keepAssets = false) {
   mediaController.abort(); mediaController = new AbortController();
   if (previewController) previewController.abort();
   if (imageObserver) imageObserver.disconnect();
@@ -30,8 +36,18 @@ function resetMedia() {
   iconObserver = null;
   imageJobs.length = 0;
   iconJobs.length = 0;
-  assets.forEach(entry => { if (entry.url) URL.revokeObjectURL(entry.url); });
-  assets.clear();
+  // Retain completed downloads for this query only, with a bounded lifetime
+  // and size. Never persist image bytes in browser storage or its HTTP cache.
+  let retainedBytes = 0, retainedCount = 0;
+  [...assets.entries()].reverse().forEach(([key, entry]) => {
+    if (keepAssets && entry.url && entry.expires > Date.now() &&
+        retainedCount < 160 && retainedBytes + entry.bytes <= 16 * 1024 * 1024) {
+      retainedBytes += entry.bytes; retainedCount++;
+    } else {
+      if (entry.url) URL.revokeObjectURL(entry.url);
+      assets.delete(key);
+    }
+  });
   const dialog = document.querySelector('#image-dialog');
   if (dialog.open) dialog.close();
   document.querySelector('#preview-image').removeAttribute('src');
@@ -39,12 +55,16 @@ function resetMedia() {
 }
 function imageAsset(src, signal) {
   const existing = assets.get(src);
-  if (existing && (existing.url || !existing.signal.aborted)) return existing.promise;
+  if (existing && (existing.url || !existing.signal.aborted)) {
+    assets.delete(src); assets.set(src, existing);
+    return existing.promise;
+  }
   const entry = {url: null, signal};
   entry.promise = (async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const response = await fetch(src, {cache: 'no-store', credentials: 'omit',
+      const response = await fetch(src, {cache: 'no-store', credentials: 'same-origin',
         referrerPolicy: 'no-referrer', signal});
+      requireAccess(response);
       if ((response.status === 503 || response.status === 429) && attempt < 2) {
         await new Promise(resolve => setTimeout(resolve, 500));
         if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -54,6 +74,8 @@ function imageAsset(src, signal) {
       const blob = await response.blob();
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
       if (!/^image\/(png|jpeg|gif|webp|avif|x-icon|vnd\.microsoft\.icon)$/.test(blob.type)) throw new Error('Unsupported image');
+      entry.bytes = blob.size;
+      entry.expires = Date.now() + 300000;
       entry.url = URL.createObjectURL(blob);
       return entry.url;
     }
@@ -65,7 +87,13 @@ function imageAsset(src, signal) {
   return entry.promise;
 }
 function pumpImages() {
-  while (imageActive < 3 && imageJobs.length) {
+  // Scrolling may bring a later tile into view while prefetches are queued.
+  const distance = img => {
+    const box = img.parentElement.getBoundingClientRect();
+    return Math.max(0, box.top - innerHeight, -box.bottom);
+  };
+  imageJobs.sort((a, b) => distance(a.img) - distance(b.img));
+  while (imageActive < 4 && imageJobs.length) {
     const {img, signal} = imageJobs.shift();
     if (signal.aborted || !img.isConnected) continue;
     imageActive++;
@@ -185,7 +213,8 @@ async function loadOverview(query) {
   const data = new FormData(); data.set('q', query);
   try {
     const response = await fetch('/overview', {method: 'POST', body: data,
-      cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller.signal});
+      cache: 'no-store', credentials: 'same-origin', referrerPolicy: 'no-referrer', signal: controller.signal});
+    requireAccess(response);
     const markup = await response.text();
     if (wikiPending !== controller || currentQuery !== query || !panel.isConnected) return;
     panel.innerHTML = markup;
@@ -228,8 +257,9 @@ async function fillResults(data, key, id) {
   data.set('progressive', 'fill');
   try {
     const response = await fetch('/', {method: 'POST', body: data,
-      headers: {'X-Portal-Request': '1'}, cache: 'no-store', credentials: 'omit',
+      headers: {'X-Portal-Request': '1'}, cache: 'no-store', credentials: 'same-origin',
       referrerPolicy: 'no-referrer', signal: controller.signal});
+    requireAccess(response);
     const markup = await response.text();
     if (sequence !== id || fillPending !== controller) return;
     const parsed = parseMarkup(markup);
@@ -286,7 +316,7 @@ async function submit(form) {
   data.set('progressive', 'initial');
   const query = String(data.get('q') || '').trim();
   if (!query) { pending = null; queryInput.focus(); return; }
-  resetMedia();
+  resetMedia(currentQuery === query);
   if (currentQuery !== query) { lastOverview = null; pageCache.clear(); }
   currentQuery = query;
   queryInput.value = query;
@@ -303,8 +333,9 @@ async function submit(form) {
     if (cached && cached.expires > Date.now()) markup = cached.markup;
     else {
       const response = await fetch('/', {method: 'POST', body: data,
-        headers: {'X-Portal-Request': '1'}, cache: 'no-store', credentials: 'omit',
+        headers: {'X-Portal-Request': '1'}, cache: 'no-store', credentials: 'same-origin',
         referrerPolicy: 'no-referrer', signal: controller.signal});
+      requireAccess(response);
       markup = await response.text();
       ok = response.ok;
     }
@@ -375,7 +406,9 @@ function clearScreen() {
   document.querySelector('#preview-host').textContent = '';
   document.querySelector('#preview-link').removeAttribute('href');
 }
-document.querySelector('#clear').addEventListener('click', clearScreen);
+document.querySelector('#clear').addEventListener('click', () => {
+  clearScreen(); queryInput.focus({preventScroll: true});
+});
 document.querySelector('#privacy-open').addEventListener('click', () => document.querySelector('#privacy-dialog').showModal());
 document.querySelectorAll('.close-dialog').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
 document.addEventListener('click', event => {
@@ -407,7 +440,12 @@ document.addEventListener('keydown', event => {
   }
 });
 window.addEventListener('pagehide', clearScreen);
-window.addEventListener('pageshow', event => { if (event.persisted) clearScreen(); });
+window.addEventListener('pageshow', event => {
+  if (event.persisted) { clearScreen(); queryInput.focus({preventScroll: true}); }
+});
 if (currentQuery) loadOverview(currentQuery);
+else if (document.activeElement === document.body || document.activeElement === queryInput) {
+  queryInput.focus({preventScroll: true});
+}
 attachImages();
 attachIcons();

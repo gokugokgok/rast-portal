@@ -14,6 +14,7 @@ from media import register_image, load_image, ImageBusy
 from cache import MemoryCache
 from favicons import register_icon, load_icon
 from searching import search_results, search_cache, SearchError, COUNTS, MODES
+from auth import install_auth, authenticated, login_page
 
 app = Flask(__name__)
 app.config.update(MAX_CONTENT_LENGTH=8192)
@@ -77,6 +78,9 @@ def reject_query_urls():
                     return 'Forbidden', 403
             except ValueError:
                 return 'Forbidden', 403
+
+
+install_auth(app)
 
 
 @app.after_request
@@ -299,6 +303,8 @@ def source():
 
 @app.errorhandler(413)
 def too_large(_error):
+    if not authenticated(app):
+        return login_page('入力が大きすぎます。', 413)
     return show('入力が大きすぎます。', 413)
 
 

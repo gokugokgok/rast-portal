@@ -1,3 +1,4 @@
+from auth_test_support import authorized_client
 import gzip
 import unittest
 from unittest.mock import MagicMock, patch
@@ -7,7 +8,7 @@ import app
 
 class LightweightTests(unittest.TestCase):
     def setUp(self):
-        self.client = app.app.test_client()
+        self.client = authorized_client(app.app)
         app.search_cache.clear()
         app._used = 0
 

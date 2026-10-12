@@ -235,6 +235,18 @@ def load_image(token):
             return None
         sources, thumbnail = entry[0]
     deadline = time.monotonic() + (6 if thumbnail else 24)
+    if thumbnail:
+        # A supplied inline thumbnail or a downloaded fallback can display
+        # immediately. Keep the original-first policy for large previews.
+        for source in sources:
+            if source.startswith('data:image/'):
+                data = base64.b64decode(source.split(',', 1)[1], validate=True)
+                return data, image_mime(data)
+        with _lock:
+            for source in sources:
+                cached = _cache.get(hashlib.sha256(source.encode()).digest())
+                if cached and cached[0] is not None and cached[1] > time.monotonic():
+                    return cached[0]
     for source in sources:
         if time.monotonic() >= deadline:
             return None

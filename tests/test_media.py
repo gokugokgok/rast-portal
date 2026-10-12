@@ -1,3 +1,4 @@
+from auth_test_support import authorized_client
 import time
 import base64
 from concurrent.futures import ThreadPoolExecutor
@@ -56,6 +57,37 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(fetcher.call_count, 2)
 
     @patch('media.fetch_public_image')
+    def test_thumbnail_uses_cached_fallback_without_waiting_for_primary(self, fetcher):
+        png = (b'\x89PNG\r\n\x1a\nthumbnail', 'image/png')
+        fetcher.return_value = png
+        fallback = media.register_image('https://example.com/cached.png').split('/')[-1]
+        media.load_image(fallback)
+        token = media.register_image('https://example.com/slow.png', 'https://example.com/cached.png', thumbnail=True).split('/')[-1]
+        self.assertEqual(media.load_image(token), png)
+        self.assertEqual(fetcher.call_count, 1)
+
+    @patch('media.fetch_public_image')
+    def test_thumbnail_skips_expired_cached_fallback(self, fetcher):
+        png = (b'\x89PNG\r\n\x1a\nthumbnail', 'image/png')
+        fetcher.return_value = png
+        fallback = media.register_image('https://example.com/cached.png').split('/')[-1]
+        media.load_image(fallback)
+        token = media.register_image('https://example.com/first.png', 'https://example.com/cached.png', thumbnail=True).split('/')[-1]
+        with patch('media.time.monotonic', return_value=time.monotonic() + media.CACHE_TTL + 1):
+            self.assertEqual(media.load_image(token), png)
+        self.assertEqual(fetcher.call_args.args[0], 'https://example.com/first.png')
+
+    @patch('media.fetch_public_image')
+    def test_inline_thumbnail_bypasses_network_and_busy_slots(self, fetcher):
+        png = b'\x89PNG\r\n\x1a\nthumbnail'
+        inline = 'data:image/png;base64,' + base64.b64encode(png).decode()
+        token = media.register_image('https://example.com/slow.png', inline, thumbnail=True).split('/')[-1]
+        with patch('media._slots.acquire', return_value=False) as acquire:
+            self.assertEqual(media.load_image(token), (png, 'image/png'))
+        acquire.assert_not_called()
+        fetcher.assert_not_called()
+
+    @patch('media.fetch_public_image')
     def test_parallel_images_wait_and_duplicate_downloads_merge(self, fetcher):
         png = (b'\x89PNG\r\n\x1a\nthumbnail', 'image/png')
         def slow(*args, **kwargs):
@@ -98,7 +130,7 @@ class MediaTests(unittest.TestCase):
 
     @patch('app.load_image', side_effect=media.ImageBusy)
     def test_congestion_is_retryable(self, loader):
-        response = app.app.test_client().get('/media/' + 'a' * 32)
+        response = authorized_client(app.app).get('/media/' + 'a' * 32)
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.headers['Retry-After'], '1')
 
@@ -151,7 +183,7 @@ class MediaTests(unittest.TestCase):
 
     @patch('app.load_image', return_value=(b'\x89PNG\r\n\x1a\n', 'image/png'))
     def test_proxy_headers_and_unknown_token(self, loader):
-        client = app.app.test_client()
+        client = authorized_client(app.app)
         response = client.get('/media/' + 'a' * 32)
         self.assertEqual(response.status_code, 200)
         self.assertIn('no-store', response.headers['Cache-Control'])
